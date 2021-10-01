@@ -1,0 +1,195 @@
+---
+title: "Randomization and Unobserved Heterogeneity"
+output: html_notebook
+---
+
+Ultimately, this will be a Shiny app. But, it's going to use color (not great for color blindness) to show how random assignment "averages out" unobserved heterogeneity (represented by color)
+
+```{r setup, echo = FALSE}
+library(tidyverse)
+library(randomcoloR)
+library(patchwork)  # Arrange some plots side by side
+
+# We're going to make a "grid" of observations, so specify the m and n.
+m <- 20
+n <- 50  # Make this an even number just to make it simple
+
+# Calculate the total observations
+total_obs <- m * n
+
+# The number of unique colors to use
+num_colors <- sample(5:8, 1)
+
+```
+
+Let's work with an example where we have `r format(total_obs, big.mark = ",")` observations and `r num_colors` different colors within those observations.
+
+```{r echo = FALSE}
+
+# Make a data frame that has `num_colors` unique colors in it. We don't want 
+# the colors to be evenly distributed, so we're also going to repeat each 
+# color a variable number of times.
+
+colors_df <- tibble(colors = randomColor(num_colors,
+                                         hue = "random",
+                                         luminosity = "bright"),
+                    weight = sample(1:10, num_colors, replace = TRUE))
+
+expand_colors <- function(color, rep_ct){
+  tibble(color = rep(color, rep_ct))
+}
+
+colors_exp_df <- map2_dfr(colors_df$colors, colors_df$weight, expand_colors)
+
+```
+
+```{r echo = FALSE}
+
+# Create a data frame with the random colors. This will be one master 
+# column that we'll plot on a grid like a matrix.
+
+df_master <- tibble(idx = seq(1:total_obs),
+                    color_row = sample(1:nrow(colors_exp_df), 
+                                       total_obs, replace = TRUE)) %>% 
+  # Set a color
+  mutate(color = colors_exp_df$color[color_row]) %>% 
+  # Split out the R, G, and B values
+  mutate(red = substr(color, 2, 3) %>% strtoi(base = 16),
+         green = substr(color, 4, 5) %>% strtoi(base = 16),
+         blue = substr(color, 6, 7) %>% strtoi(base = 16))
+# Set x and y values
+df_master$x_pos <- rep(1:n, length.out = nrow(df_master))
+df_master$y_pos <- rep(1:m, each=n)
+
+# Assign treatment (1) and control (0)
+df_master$assignment <- sample(0:1, total_obs, replace = TRUE)
+
+# Populate the colors for the treatment and control groups
+df_master <- df_master %>% 
+  mutate(color_control = if_else(assignment == 0, color, "gray90"),
+         color_treatment = if_else(assignment == 1, color, "gray90"))
+
+```
+
+## Our Colors Represent a Heterogeneous Aspect of Our Sample
+
+That's just a fancy way of saying, "It varies." Think of this as being something like household income or race or age group. In an RCT, there is all sorts of "unobserved heterogeneity": underlying aspects of our experimental groups that we may not be able to measure (or simply exclude from measurement).
+
+```{r warning=FALSE, echo = FALSE}
+
+ggplot(df_master, aes(x = x_pos, y = y_pos, fill = color)) + 
+  geom_tile(color = "white", size = 1) +
+  labs(title = paste(format(total_obs, big.mark = ","), "Observations")) +
+  scale_fill_identity() +
+  theme_void() +
+  theme(plot.title.position = "plot",
+        plot.title = element_text(hjust = 0.5, family = "Lato", color = "#7A7574", face = "bold"))
+
+```
+
+## Randomly Assign the Observations to Treatment and Control
+
+We've done straight-up random assignment here through the power of R and the `sample()` function. So, now we can think of our overall group above as being split into two different groups: a control group and a treatment group:
+
+```{r warning=FALSE, echo = FALSE}
+ggplot(df_master, aes(x = x_pos, y = y_pos, fill = color_control)) + 
+  geom_tile(color = "white", size = 1) +
+  labs(title = "Control Group") +
+  scale_fill_identity() +
+  theme_void() +
+  theme(plot.title.position = "plot",
+        plot.title = element_text(hjust = 0.5, family = "Lato", color = "#7A7574", face = "bold"))
+
+ggplot(df_master, aes(x = x_pos, y = y_pos, fill = color_treatment)) + 
+  geom_tile(color = "white", size = 1) +
+  labs(title = "Treatment Group") +
+  scale_fill_identity() +
+  theme_void() +
+  theme(plot.title.position = "plot",
+        plot.title = element_text(hjust = 0.5, family = "Lato", color = "#7A7574", face = "bold"))
+```
+Let's make that a little easier to see by putting them side by side. (If you're trying to compare, start from the bottom left of each plot and you'll see that all of the light gray cells were removed as the colored—included—cells were then just compressed together).
+
+```{r warning=FALSE, echo = FALSE}
+
+# Treatment
+df_treatment <- df_master %>% 
+  filter(assignment == 1) 
+# Set x and y values
+df_treatment$x_pos <- rep(1:(n/2), length.out = nrow(df_treatment))
+# Might not be a perfect split, so go a little long and then clip it
+df_treatment$y_pos <- rep(1:(m+2), each=n/2)[1:nrow(df_treatment)]
+
+# Control
+df_control <- df_master %>% 
+  filter(assignment == 0) 
+# Set x and y values
+df_control$x_pos <- rep(1:(n/2), length.out = nrow(df_control))
+# Might not be a perfect split, so go a little long and then clip it
+df_control$y_pos <- rep(1:(m+2), each=n/2)[1:nrow(df_control)]
+
+# Make the plots. We'll then put them next to each other
+gg_treatment <- ggplot(df_treatment, aes(x = x_pos, y = y_pos, fill = color)) + 
+  geom_tile(color = "white", size = 1) +
+  labs(title = "Treatment Group") +
+  scale_fill_identity() +
+  theme_void() +
+  theme(plot.title.position = "plot",
+        plot.title = element_text(hjust = 0.5, family = "Lato", color = "#7A7574", face = "bold"))
+
+gg_control <- ggplot(df_control, aes(x = x_pos, y = y_pos, fill = color)) + 
+  geom_tile(color = "white", size = 1) +
+  labs(title = "Control Group") +
+  scale_fill_identity() +
+  theme_void() +
+  theme(plot.title.position = "plot",
+        plot.title = element_text(hjust = 0.5, family = "Lato", color = "#7A7574", face = "bold"))
+
+# Output them as a single plot side by side (patchwork)
+gg_control + gg_treatment
+
+```
+Let your eyes blur a bit as you look at the plots above. Don't they seem like they have a...pretty even mix of the colors?
+
+## How Even Are They?
+
+We can take our two groups above and calculate the "average" color for each group.
+
+```{r echo = FALSE, warning = FALSE}
+
+mean_control <- rgb(mean(df_control$red),
+                    mean(df_control$green),
+                    mean(df_control$blue),
+                    maxColorValue = 255)
+
+gg_control_mean <- ggplot() +
+  scale_x_continuous(limits = c(0, n/2)) +
+  scale_y_continuous(limits = c(0, m)) +
+  labs(title = paste("Mean Control Color:", mean_control)) +
+  theme_void() +
+  theme(plot.title.position = "plot",
+        plot.title = element_text(hjust = 0.5, family = "Lato", color = "#7A7574", 
+                                  face = "bold", margin = margin(0.25,0,0.25,0, "cm")),
+        panel.background = element_rect(fill = mean_control, color = NA))
+
+mean_treatment <- rgb(mean(df_treatment$red),
+                    mean(df_treatment$green),
+                    mean(df_treatment$blue),
+                    maxColorValue = 255)
+
+gg_treatment_mean <- ggplot() +
+  scale_x_continuous(limits = c(0, n/2)) +
+  scale_y_continuous(limits = c(0, m)) +
+  labs(title = paste("Mean Treatment Color:", mean_treatment)) +
+  theme_void() +
+  theme(plot.title.position = "plot",
+        plot.title = element_text(hjust = 0.5, family = "Lato", color = "#7A7574", 
+                                  face = "bold", margin = margin(0.25,0,0.25,0, "cm")),
+        panel.background = element_rect(fill = mean_treatment, color = NA))
+
+gg_control_mean + plot_spacer() + gg_treatment_mean +
+  plot_layout(widths = c(10,1,10))
+
+```
+
+Pretty close, right?!!!

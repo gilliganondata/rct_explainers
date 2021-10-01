@@ -1,0 +1,45 @@
+---
+title: "Block Randomization"
+output: html_notebook
+---
+
+Initially, this is just a recreation of how complete randomization vs. block randomization changes the sampling distribution. Fig 4-2 on p. 113 in "Field Experiments."
+
+```{r fig.height=2, fig.width=2}
+library(tidyverse)
+
+df <- tibble(complete = rnorm(100000, 4, 5),
+             strong = rnorm(100000, 4, 1),
+             weak = rnorm(100000,4,3)) %>% 
+  pivot_longer(cols = complete:weak, names_to = "blocking_type", values_to = "values") %>% 
+  mutate(blocking_type = case_when(
+    blocking_type == "complete" ~ "Complete randomization",
+    blocking_type == "strong" ~ "Blocked randomization (strong predictor)",
+    TRUE ~ "Blocked randomization (weak predictor)"
+  )) %>% 
+  mutate(blocking_type = factor(blocking_type,
+         levels = c("Complete randomization",
+                    "Blocked randomization (strong predictor)",
+                    "Blocked randomization (weak predictor)")))
+
+ggplot(df, aes(values)) + 
+  # geom_histogram(bins=50, fill = NA, colour = "red") +
+  geom_density(colour = "#009CAB") +
+  facet_wrap(~ blocking_type, ncol = 1) +
+  scale_x_continuous(limits = c(-10, 20)) +
+  labs(title = "Sampling Distributions",
+       subtitle = "Completely Randomized vs. Block Randomized Designs",
+       y = "Density") +
+  theme_light() +
+  theme(text = element_text(family = "Lato"),
+        plot.title.position = "plot",
+        plot.title = element_text(color = "#221F20", face = "bold", size = 11),
+        plot.subtitle =  element_text(color = "#7A7574", face = "bold", size = 9),
+        strip.background = element_blank(),
+        strip.text = element_text(color = "#221F20", face = "bold", size = 11),
+        axis.ticks = element_blank(),
+        panel.border = element_blank(),
+        axis.title.x = element_blank())
+
+```
+
