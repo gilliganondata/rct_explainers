@@ -1,0 +1,304 @@
+---
+title: "Exploring the Magic of Randomization"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: scroll
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(randomcoloR)
+library(patchwork)  # Arrange some plots side by side
+
+theme_main <- theme_void() +
+  theme(plot.title.position = "plot",
+        plot.title = element_text(hjust = 0.5, family = "Lato", color = "#7A7574", face = "bold"))
+
+```
+
+Inputs {.sidebar}
+-----------------------------------------------------------------------
+
+How many observations do we want in the data set?
+
+```{r total_observations}
+
+sliderInput("num_rows", label = "Number of Rows:",
+            min = 10, max = 30, value = 20, step = 1)
+
+sliderInput("num_cols", label = "Number of Columns:",
+            min = 40, max = 60, value = 50, step = 2)
+
+sliderInput("num_colors", label = "Number of Unique Colors:",
+            min = 3, max = 8, value = 6, step = 1)
+```
+
+```{r build_data}
+
+# Calculate the total observations (reactive function--called later)
+get_total_obs <- reactive({input$num_rows * input$num_cols})
+
+# Make a data frame that has `num_colors` unique colors in it. We don't want 
+# the colors to be evenly distributed, so we're also going to repeat each 
+# color a variable number of times. (reactive function--used later)
+get_colors <- reactive({
+  colors_df <- tibble(colors = randomColor(input$num_colors,
+                                           hue = "random",
+                                           luminosity = "bright"),
+                      weight = sample(1:10, input$num_colors, replace = TRUE))
+  
+  expand_colors <- function(color, rep_ct){
+    tibble(color = rep(color, rep_ct))
+  }
+  colors_exp_df <- map2_dfr(colors_df$colors, colors_df$weight, expand_colors)
+})
+
+# Create a data frame with the random colors. This will be one master 
+# column that we'll plot on a grid, ultimately.
+get_data <- reactive({
+  # Get a data frame with the colors. This has the unique number of colors
+  # based on user input, but then those colors are repeated at varying 
+  # frequencies so that they are not all just evenly distributed
+  colors_exp_df <- get_colors()
+  
+  # Get the total observations (count)
+  total_obs <- get_total_obs()
+  
+  # Build the main data frame
+  df <- tibble(idx = seq(1:total_obs),
+               color_row = sample(1:nrow(colors_exp_df), 
+                                  total_obs, replace = TRUE)) %>% 
+    # Set a color
+    mutate(color = colors_exp_df$color[color_row]) %>% 
+    # Split out the R, G, and B values
+    mutate(red = substr(color, 2, 3) %>% strtoi(base = 16),
+           green = substr(color, 4, 5) %>% strtoi(base = 16),
+           blue = substr(color, 6, 7) %>% strtoi(base = 16))
+  # Set x and y values
+  df$x_pos <- rep(1:input$num_cols, length.out = nrow(df))
+  df$y_pos <- rep(1:input$num_rows, each=input$num_cols)
+  
+  # Assign treatment (1) and control (0)
+  df$assignment <- sample(0:1, total_obs, replace = TRUE)
+  
+  # Populate the colors for the treatment and control groups
+  df <- df %>% 
+    mutate(color_control = if_else(assignment == 0, color, "gray90"),
+           color_treatment = if_else(assignment == 1, color, "gray90"))
+})
+
+# Get a data frame for just the treatment observations
+get_treatment <- reactive({
+  df <- get_data() %>% filter(assignment == 1) 
+  # Set x and y values
+  df$x_pos <- rep(1:(input$num_cols/2), length.out = nrow(df))
+  # Might not be a perfect split, so go a little long and then clip it
+  df$y_pos <- rep(1:(input$num_rows+2), each=input$num_cols/2)[1:nrow(df)]
+  df
+})
+
+# Get a data frame for just the control observations
+get_control <- reactive({
+  df <- get_data() %>% filter(assignment == 0) 
+  # Set x and y values
+  df$x_pos <- rep(1:(input$num_cols/2), length.out = nrow(df))
+  # Might not be a perfect split, so go a little long and then clip it
+  df$y_pos <- rep(1:(input$num_rows+2), each=input$num_cols/2)[1:nrow(df)]
+  df
+})
+```
+
+Row {data-height=100}
+-----------------------------------------------------------------------
+
+### Our Colors Represent a Heterogeneous Aspect of Our Sample
+
+That's just a fancy way of saying, "It varies." Think of this as being something like household income or race or age group. In an RCT, there is all sorts of "unobserved heterogeneity": underlying aspects of our experimental groups that we may not be able to measure (or simply exclude from measurement).
+
+Row {data-height=900 .tabset}
+-----------------------------------------------------------------------
+
+### Overall Dataset
+
+```{r}
+
+output$plot_all <- renderPlot({
+  
+  total_obs <- get_total_obs()
+  df_master <- get_data()
+  
+  ggplot(df_master, aes(x = x_pos, y = y_pos, fill = color)) + 
+    geom_tile(color = "white", size = 1) +
+    labs(title = paste(format(total_obs, big.mark = ","), "Observations")) +
+    scale_fill_identity() +
+    theme_main
+},
+height = 400, width = 800)
+
+plotOutput("plot_all")
+```
+
+### Treatment vs. Control
+
+We've done straight-up _random assignment_ to split the data into two groups: a control group and a treatment group:
+
+```{r}
+# Plot the control and treatment in the same grid maintaining the same layout as the
+# master view of the observations
+output$plot_split <- renderPlot({
+  df_master <- get_data()
+  gg_control <- ggplot(df_master, aes(x = x_pos, y = y_pos, fill = color_control)) + 
+    geom_tile(color = "white", size = 1) +
+    labs(title = "Control Group") +
+    scale_fill_identity() +
+    theme_main
+  
+  gg_treatment <- ggplot(df_master, aes(x = x_pos, y = y_pos, fill = color_treatment)) + 
+    geom_tile(color = "white", size = 1) +
+    labs(title = "Treatment Group") +
+    scale_fill_identity() +
+    theme_main
+  
+  gg_control / gg_treatment
+},
+height = 800, width = 800)
+
+plotOutput("plot_split")
+```
+
+### Treatment vs. Control (Condensed)
+
+A more condensed view of the treatment vs. control samples. If you're trying to compare these to the previous tab (what? you don't trust me???), start at the _bottom left_ of each of the charts and you'll see that we've just removed the empty (light gray) cells. Let your eyes blur a bit as you look at the plots. Don't they seem like they have a...pretty even mix of the colors?
+
+
+```{r}
+output$plot_split_condensed <- renderPlot({
+  
+  # Get individual data frames for treatment and control
+  df_treatment <- get_treatment()
+  df_control <- get_control()
+  
+  # Make the plots. We'll then put them next to each other
+  gg_treatment <- ggplot(df_treatment, aes(x = x_pos, y = y_pos, fill = color)) + 
+    geom_tile(color = "white", size = 1) +
+    labs(title = "Treatment Group") +
+    scale_fill_identity() +
+    theme_main
+  
+  gg_control <- ggplot(df_control, aes(x = x_pos, y = y_pos, fill = color)) + 
+    geom_tile(color = "white", size = 1) +
+    labs(title = "Control Group") +
+    scale_fill_identity() +
+    theme_main
+  
+  # Output them as a single plot side by side (patchwork)
+  gg_control + gg_treatment
+  
+},
+height = 400, width = 800)
+
+plotOutput("plot_split_condensed")
+
+```
+
+
+### Color Comparison
+
+We can take our two groups on the previous tab and calculate the "average" color for each group. Pretty close, right?! Is the distribution of the colors across these two groups _identical_? No! But, are they _similar_? Yes! Randomization!!!
+
+```{r}
+
+output$plot_comparison <- renderPlot({
+  
+  df_control <- get_control()
+  df_treatment <- get_treatment()
+  
+  # Calculate the mean color for treatment and control and then make a plot
+  # that shows them.
+  mean_control <- rgb(mean(df_control$red),
+                      mean(df_control$green),
+                      mean(df_control$blue),
+                      maxColorValue = 255)
+  
+  # Sneaky: this plot plots...nothing. But then makes the background color
+  # of nothing the mean color.
+  gg_control_mean <- ggplot() +
+    scale_x_continuous(limits = c(0, input$num_cols/2)) +
+    scale_y_continuous(limits = c(0, input$num_rows)) +
+    labs(title = paste("Mean Control Color:", mean_control)) +
+    theme_main +
+    theme(plot.title = element_text(margin = margin(0.25,0,0.25,0, "cm")),
+          panel.background = element_rect(fill = mean_control, color = NA),
+          panel.border = element_rect(fill = NA, colour = "white", size = 10))
+  
+  mean_treatment <- rgb(mean(df_treatment$red),
+                        mean(df_treatment$green),
+                        mean(df_treatment$blue),
+                        maxColorValue = 255)
+  
+  gg_treatment_mean <- ggplot() +
+    scale_x_continuous(limits = c(0, input$num_cols/2)) +
+    scale_y_continuous(limits = c(0, input$num_rows)) +
+    labs(title = paste("Mean Treatment Color:", mean_treatment)) +
+    theme_main +
+    theme(plot.title = element_text(margin = margin(0.25,0,0.25,0, "cm")),
+          panel.background = element_rect(fill = mean_treatment, color = NA),
+          panel.border = element_rect(fill = NA, colour = "white", size = 10))
+  
+  # Get the max value so common limits can be set for the bar charts
+  max_val <- get_data() %>% 
+    group_by(color, assignment) %>% 
+    summarise(obs = n()) %>% 
+    pull(obs) %>% max()
+  
+  # Control
+  df_control_summary <- df_control %>% 
+    group_by(color) %>% summarise(obs = n()) %>% arrange(obs) 
+  df_control_summary$color <- factor(df_control_summary$color, levels = df_control_summary$color)
+  
+  gg_control_bar <- ggplot(df_control_summary, aes(x = color, y = obs, fill = color, 
+                                                   label = format(obs, big.mark = ",", trim = TRUE))) +
+    geom_bar(stat = "identity") +
+    geom_text(hjust = 0, nudge_y = 1, family = "Lato") +
+    scale_y_continuous(limits = c(0, max_val * 1.1)) +
+    scale_fill_identity() +
+    coord_flip() +
+    labs(title = "Control: Color Breakdown") +
+    theme_void() +
+    theme(plot.title.position = "plot",
+          plot.title = element_text(hjust = 0.5, family = "Lato", color = "#7A7574", 
+                                    face = "bold", margin = margin(0.25,0,0.25,0, "cm")),
+          legend.position = "none")
+  
+  # Treatment
+  df_treatment_summary <- df_treatment %>% 
+    group_by(color) %>% summarise(obs = n()) %>% arrange(obs) 
+  # We'll use the *levels* from the control to assure they are in the same order!
+  df_treatment_summary$color <- factor(df_treatment_summary$color, levels = df_control_summary$color)
+  
+  gg_treatment_bar <- ggplot(df_treatment_summary, aes(x = color, y = obs, fill = color, 
+                                                       label = format(obs, big.mark = ",", trim = TRUE))) +
+    geom_bar(stat = "identity") +
+    geom_text(hjust = 0, nudge_y = 1, family = "Lato") +
+    scale_y_continuous(limits = c(0, max_val * 1.1)) +
+    scale_fill_identity() +
+    coord_flip() +
+    labs(title = "Treatment: Color Breakdown") +
+    theme_void() +
+    theme(plot.title.position = "plot",
+          plot.title = element_text(hjust = 0.5, family = "Lato", color = "#7A7574", 
+                                    face = "bold", margin = margin(0.25,0,0.25,0, "cm")),
+          legend.position = "none")
+  
+  # Output
+  (gg_control_mean / gg_control_bar) | (gg_treatment_mean / gg_treatment_bar) 
+  
+}, height = 500, width = 800)
+
+plotOutput("plot_comparison")
+
+```
+
