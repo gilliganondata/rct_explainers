@@ -4,16 +4,31 @@ output:
   flexdashboard::flex_dashboard:
     orientation: rows
     vertical_layout: scroll
+    theme:
+      version: 4
+      bg: "#FFFFFF"
+      fg: "#3F433D"
+      primary: "#00727C"
+      navbar-bg: "#221F20"
+      base_font: 
+        google: Lato
 runtime: shiny
 ---
+
+<style>label {font-size: 0.8em}</style>
 
 ```{r setup, include=FALSE}
 library(flexdashboard)
 library(shinyWidgets)  # Tweak some of the controls
 library(tidyverse)
+library(gt)            # Nicer table
+library(htmltools)     # Nicer table formatting
 library(scales)        # Formatting some percentages
 library(randomcoloR)
+library(randomizr)    # So we can do complete random assignment easily
 library(patchwork)     # Arrange some plots side by side
+
+set.seed(61705)
 
 theme_main <- theme_void() +
   theme(plot.title.position = "plot",
@@ -56,9 +71,11 @@ sliderTextInput("color_predictiveness", label = "Outcome Predictiveness of Color
 ```{r build_data_button}
 # This is to build the base, all-knowing data frame. Simulations will then
 # split this data set into treatment and control and try it out.
-actionButton("build_data", "Build Data Set")
+actionButton("build_data", "1. Build Data Set")
 ```
 </div>
+
+<div style="font-size: 0.7em; font-style: italic;">\* You're omnipotent! (You wouldn't know this in reality.)</div>
 
 <hr>
 
@@ -71,11 +88,9 @@ materialSwitch(inputId = "blocking", label = "Block on Color", value = FALSE,
 
 <div style = "text-align: center;">
 ```{r addl_settings}
-actionButton("run_simulation", "Run Simulation")
+actionButton("run_simulation", "2. Run Simulation")
 ```
 </div>
-
-\* You're omnipotent! (You wouldn't know this in reality.)
 
 ```{r build_data}
 
@@ -180,12 +195,9 @@ get_assignments <- eventReactive(input$run_simulation, {
   
   # Assign treatment (1) and control (0)
   if(input$blocking == TRUE){
-    df <- df %>%
-      group_by(color) %>% 
-      mutate(assignment = sample(0:1, size = n(), replace = TRUE)) %>% 
-      ungroup()
+    df$assignment <- block_ra(df$color, prob = 0.5)
   } else {
-    df$assignment <- sample(0:1, total_obs, replace = TRUE)
+    df$assignment <- complete_ra(total_obs, prob = 0.5)
   }
   
   # Populate the colors for the treatment and control groups
@@ -224,7 +236,7 @@ Row {data-height=100}
 
 That's just a fancy way of saying, "It varies." Think of this as being something like household income or race or age group. In an RCT, there is all sorts of "unobserved heterogeneity": underlying aspects of the experimental groups that we may not be measurable.
 
-Row {data-height=1200 .tabset}
+Row {data-height=1250 .tabset}
 -----------------------------------------------------------------------
 
 ### Overall Dataset
@@ -249,32 +261,54 @@ height = 400, width = 800)
 
 plotOutput("plot_all")
 
-# Explain what the table is
-output$data_master_text <- renderText({
+# Show the underlying data table
+output$data_master <- render_gt({
+  df_master <- get_data() 
   
-  # This just keeps the messag from showing up before the data is built. #hacky
-  df <- get_data()
+  # Function to take the hex values for a color and return it as a gt HTML value.
+  # This can't be done right in the the mutate call, so setting as a function that
+  # returns the HTML-ified value.
+  add_cell_color <- function(col) {
+    
+    cell_color = paste0("display: inline-block; padding: 2px 12px; ",
+                        "border-radius: 15px; font-weight: 600; font-size: 12px; ",
+                        "background: ", col, "; color: white;") %>% 
+      htmltools::div(style = ., col) %>% as.character() %>% gt::html()
+  }
   
-  msg <- "The table below reflects the first few observations from the underlying data set (starting from the bottom left). The Y_0 and Y_1 are potential outcomes: we're operating in a world where we know exactly what outcome we would see whether each observation received or did not receive treatment. These are affected by the Treatment Effect and the Outcome Predictiveness of Color selected at left."
+  df_master <- df_master %>% 
+    head(20) %>% 
+    mutate(effect = percent((Y1 - Y0)/Y0, accuracy = 0.1),
+           Y0 = round(Y0, 0) %>% format(big.mark = ","),
+           Y1 = round(Y1, 0) %>% format(big.mark = ",")) %>% 
+    # Add a text string with the HTML to color the cells
+    mutate(color = purrr::map(color, add_cell_color)) %>% 
+    select(idx, color, Y0, Y1, effect) 
+  
+  names(df_master) <- c("Index","Color", "Y0", "Y1", "Effect")
+  
+  df_master %>% gt(rowname_col = "Index") %>% 
+    tab_header(
+      title = "A Glimpse of the Data",
+      subtitle = html("The table below reflects the first few observations from the underlying data set (starting from the bottom left). The Y<sub>0</sub> and Y<sub>1</sub> are potential outcomes: we're operating in a world where we know exactly what outcome we would see whether each observation received or did not receive treatment. These are affected by the Treatment Effect and the Outcome Predictiveness of Color selected at left.")) %>% 
+    tab_spanner(
+      label = "Potential Outcomes",
+      columns = c(Y0, Y1)
+    ) %>% 
+    cols_label(Y0 = gt::html("Y<sub>0</sub> (Not Treated)"), 
+               Y1 = gt::html("Y<sub>1</sub> (Treated)")) %>% 
+    tab_options(data_row.padding = px(2)) %>%
+    cols_width(Index ~ px(40),
+               Color ~ px(100),
+               starts_with("Y") ~px(150),
+               Effect ~ px(100)) %>%
+    cols_align(align = "right",
+               columns = everything()) %>% 
+    cols_align(align = "center",
+               columns = c(Index, Color))
 })
 
-textOutput("data_master_text")
-
-# Show the underlying data table
-output$data_master <- renderTable({
-  df_master <- get_data() %>% 
-    select(idx, color, Y0, Y1)
-  
-  names(df_master) <- c("Index","Color", "Y_0 (No Treatment)", "Y_1 (Treatment)")
-  
-  df_master
-},
-hover = TRUE,
-striped = TRUE,
-digits = 0,
-width = "400px")
-
-tableOutput("data_master")
+gt_output("data_master")
 
 ```
 
@@ -308,7 +342,7 @@ plotOutput("plot_split")
 
 ### Color Comparison
 
-We can take our two groups and calculate the "average" color for each group. Pretty close, right?! Is the distribution of the colors across these two groups _identical_? No! But, are they _similar_? Yes! Randomization!!!
+We can take our two groups and calculate the "average" color for each group. Pretty close, right?! Is the distribution of the colors across these two groups _identical_? No! But, are they _similar_? Yes! Randomization!!! There are countless characteristics in an RCT that differ across subjects that may or may not be observable. Randomization helps ensure that these differences "come out in the wash." 
 
 ```{r}
 
@@ -462,4 +496,93 @@ textOutput("observed_effect")
 
 ### Multi-Run Simulation
 
-_This is not yet built, but the idea would be to run several thousand simulations with the given settings to see how the sampling distribution looks with or without blocking_
+_In reality, we only run one experiment. But, with simulation, we can run the same experiment (re-doing the random assignment of treatment and control each time) 1,000 times._
+
+<div style = "text-align: center;">
+```{r multi_sim_action}
+actionButton("run_many_sims", "Run 1,000 Simulations")
+```
+
+
+```{r get_simulation}
+
+get_simulation <- eventReactive(input$run_many_sims, {
+  
+  # Get the master data set
+  df <- get_data()
+  total_obs <- nrow(df)
+  
+  # Create a data frame with 1,000 rows for the simulation
+  sim_df <- tibble(index = seq(1:1000))
+  
+  # Function to split into treatment and control and then get an observed effect.
+  # This will get run multiple times so that a sampling distribution can be constructed.
+  get_observed_effect <- function(idx){
+    
+    # Assign treatment (1) and control (0)
+    if(input$blocking == TRUE){
+      df$assignment <- block_ra(df$color, prob = 0.5)
+    } else {
+      df$assignment <- complete_ra(total_obs, prob = 0.5)
+    }
+    
+    # Summarize
+    df <- df %>% 
+      group_by(assignment) %>% 
+      summarize(Y0 = sum(Y0),
+                Y1 = sum(Y1))
+    
+    obs_Y0 <- df %>% filter(assignment == 0) %>% pull(Y0)
+    obs_Y1 <- df %>% filter(assignment == 1) %>% pull(Y1)
+    
+    obs_effect <- (obs_Y1 - obs_Y0) / obs_Y0
+    
+    df <- tibble(index = idx, obs_effect = obs_effect)
+    
+  }
+  
+  sim_df <- map_dfr(sim_df$index, get_observed_effect)
+})
+
+# Build the plot of the simulation
+output$sampling_dist <- renderPlot({
+  simulation_df <- get_simulation()
+  mean_obs <- mean(simulation_df$obs_effect)
+  sd_obs <- sd(simulation_df$obs_effect)
+  
+  ggplot() + 
+    geom_histogram(data = simulation_df, mapping = aes(obs_effect), fill = "#009CAB", alpha = 0.5, bins = 10) +
+    # Plot the Mean
+    geom_vline(aes(xintercept = mean_obs)) +
+    geom_text(data = tibble(x = mean_obs, y = 80, label = paste("Mean:", percent(mean_obs, accuracy = 0.1))),
+              mapping = aes(x = x, y = y, label = label),
+              hjust = 0, nudge_x = 0.0015) +
+    # Plot + 2SD
+    geom_vline(aes(xintercept = mean_obs + 2 * sd_obs), linetype = "dashed") +
+    geom_text(data = tibble(x = mean_obs + 2 * sd_obs, y = 80, label = paste("+2 SD:", percent(mean_obs + 2 * sd_obs, accuracy = 0.1))),
+              mapping = aes(x = x, y = y, label = label),
+              hjust = 0, nudge_x = 0.0015) +
+    # Plot - 2SD
+    geom_vline(aes(xintercept = mean_obs - 2 * sd_obs), linetype = "dashed") +
+    geom_text(data = tibble(x = mean_obs - 2 * sd_obs, y = 80, label = paste("-2 SD:", percent(mean_obs - 2 * sd_obs, accuracy = 0.1))),
+              mapping = aes(x = x, y = y, label = label),
+              hjust = 1, nudge_x = -0.0015) +
+    labs(title = "Sampling Distribution of the Observed Effect",
+         subtitle = "1,000 Simulations of the Experiment",
+         x = "Observed Effect") +
+    scale_y_continuous(expand = c(0,0)) +
+    scale_x_continuous(labels = percent) +
+    theme_void() +
+    theme(plot.title.position = "plot",
+          plot.title = element_text(face = "bold"),
+          axis.text.x = element_text(margin = margin(8, 0, 8, 0, "pt")),
+          axis.title.x = element_text(face = "bold"),
+          axis.line.x = element_line(color = "#3F433D"))
+},
+height = 400, width = 800)
+
+plotOutput("sampling_dist")
+
+```
+
+</div>
