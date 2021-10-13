@@ -31,7 +31,9 @@ set.seed(61705)
 
 theme_main <- theme_void() +
   theme(plot.title.position = "plot",
-        plot.title = element_text(hjust = 0.5, size = 16, family = "Lato", color = "#7A7574", face = "bold"))
+        plot.title = element_text(hjust = 0.5, size = 16, family = "Lato", color = "#7A7574", face = "bold"),
+        panel.background = element_rect(fill = "#F2F2F2", color = NA),
+        plot.background = element_rect(fill = "#F2F2F2", color = NA))
 
 ```
 
@@ -235,15 +237,18 @@ output$data_master <- render_gt({
   
   names(df_master) <- c("Index","Color", "Y0", "Y1", "Effect")
   
-  df_master %>% gt(rowname_col = "Index") %>% 
+  df_master %>% gt() %>% 
     tab_spanner(
       label = "Potential Outcomes",
       columns = c(Y0, Y1)
     ) %>% 
+    tab_style(style = list(cell_fill(color = "#F2F2F2")),
+              locations = list(cells_body(), cells_column_spanners(),
+                               cells_column_labels())) %>% 
     cols_label(Y0 = gt::html("Y<sub>0</sub> (Not Treated)"), 
                Y1 = gt::html("Y<sub>1</sub> (Treated)")) %>% 
     tab_options(data_row.padding = px(2)) %>%
-    cols_width(Index ~ px(40),
+    cols_width(Index ~ px(50),
                Color ~ px(100),
                starts_with("Y") ~px(150),
                Effect ~ px(100)) %>%
@@ -439,6 +444,7 @@ output$plot_comparison <- renderPlot({
     labs(title = paste("Mean Control Color:", mean_control)) +
     theme_main +
     theme(plot.title = element_text(margin = margin(0.25,0,0.25,0, "cm")),
+          plot.background = element_rect(fill = "#F2F2F2", color = NA),
           panel.background = element_rect(fill = mean_control, color = NA),
           panel.border = element_rect(fill = NA, colour = "white", size = 10))
   
@@ -451,6 +457,7 @@ output$plot_comparison <- renderPlot({
     labs(title = paste("Mean Treatment Color:", mean_treatment)) +
     theme_main +
     theme(plot.title = element_text(margin = margin(0.25,0,0.25,0, "cm")),
+          plot.background = element_rect(fill = "#F2F2F2", color = NA),
           panel.background = element_rect(fill = mean_treatment, color = NA),
           panel.border = element_rect(fill = NA, colour = "white", size = 10))
   
@@ -483,7 +490,7 @@ output$plot_comparison <- renderPlot({
     labs(title = "Control: Color Breakdown") +
     theme_void() +
     theme(plot.title.position = "plot",
-          plot.title = element_text(hjust = 0.5, family = "Lato", color = "#7A7574", 
+          plot.title = element_text(hjust = 0.5, family = "Lato", color = "#7A7574", size = 16,
                                     face = "bold", margin = margin(0.25,0,0.25,0, "cm")),
           legend.position = "none")
   
@@ -502,7 +509,7 @@ output$plot_comparison <- renderPlot({
     labs(title = "Treatment: Color Breakdown") +
     theme_void() +
     theme(plot.title.position = "plot",
-          plot.title = element_text(hjust = 0.5, family = "Lato", color = "#7A7574", 
+          plot.title = element_text(hjust = 0.5, family = "Lato", color = "#7A7574", size = 16,
                                     face = "bold", margin = margin(0.25,0,0.25,0, "cm")),
           legend.position = "none")
   
@@ -510,7 +517,9 @@ output$plot_comparison <- renderPlot({
   (gg_control | gg_treatment) / 
     (gg_control_mean | gg_treatment_mean) / 
     (gg_control_bar | gg_treatment_bar) +
-    plot_layout(heights = c(3, 1, 2))
+    plot_layout(heights = c(3, 1, 2)) +
+    plot_annotation(theme = theme(panel.background = element_rect(fill = "#F2F2F2", color = NA),
+                                  plot.background = element_rect(fill = "#F2F2F2", color = NA)))
   
   
 }, height = 800, width = 800)
@@ -560,9 +569,11 @@ get_simulation <- eventReactive(input$run_many_sims, {
   
   # Function to split into treatment and control and then get an observed effect.
   # This will get run multiple times so that a sampling distribution can be constructed.
+  # This takes as a second input whether the simulation should use blocking or not.
   get_observed_effect <- function(idx, blocked = TRUE){
     
-    # Assign treatment (1) and control (0)
+    # Assign treatment (1) and control (0). If using blocking, then do block
+    # randomization; otherwise, do complete randomization.
     if(blocked == TRUE){
       df$assignment <- block_ra(df$color, prob = 0.5)
     } else {
@@ -575,66 +586,117 @@ get_simulation <- eventReactive(input$run_many_sims, {
       summarize(Y0 = sum(Y0),
                 Y1 = sum(Y1))
     
+    # The observed values for the control (assignment == 0) are the sum of the
+    # Y0 potential outcomes and vice versa for the treated.
     obs_Y0 <- df %>% filter(assignment == 0) %>% pull(Y0)
     obs_Y1 <- df %>% filter(assignment == 1) %>% pull(Y1)
     
+    # Calculate the observed effect as a %
     obs_effect <- (obs_Y1 - obs_Y0) / obs_Y0
     
+    # Return as a data frame row, including TRUE or FALSE for whether blocking
+    # was employed.
     df <- tibble(index = idx, obs_effect = obs_effect,
                  blocked = blocked)
-    
   }
   
   # Run the simulations with blocked simulations and then not blocked simulations
   sim_df_blocked <- map_dfr(sim_df_blocked$index, get_observed_effect, blocked = TRUE)
   sim_df_not_blocked <- map_dfr(sim_df_not_blocked$index, get_observed_effect, blocked = FALSE)
   
-  # Combine the DFs (there is a column flagging if they were blocked or not)
+  # Combine the DFs (there is a column flagging if they were blocked or not).
+  # This will get split back out later, but this function is going to return a
+  # single object, so could be a list with two tibbles or just one big tibble.
+  # Six of one...
   sim_df <- sim_df_blocked %>% 
     rbind(sim_df_not_blocked)
   
 })
 
-# Build the plot of the simulation
+# Build the plot of the simulations
 output$sampling_dist <- renderPlot({
   simulation_df_master <- get_simulation()
   
+  # Get the max and min values to be used in scale_x_continuous for both plots
+  x_min = min(simulation_df_master$obs_effect)
+  x_max = max(simulation_df_master$obs_effect)
+  
+  # Set the number of bins. We may fiddle with this a bit down the road.
+  num_bins <- 15
+  
+  # Calculate a "nudge" value for placing the mean and sd labels. 
+  x_nudge = (x_max - x_min) * 0.01
+  
+  # Split the data frame into the blocked vs. not blocked versions
   sim_df_blocked <- simulation_df_master %>% filter(blocked == TRUE)
   sim_df_not_blocked <- simulation_df_master %>% filter(blocked == FALSE)
   
+  # Get the max y value for each of the plots. Do this by making a simple, 
+  # throwaway histogram and grabbing the max value. The max value *should*
+  # always come from the blocked simulation, but, just to be safe, calculate
+  # for both and calculate the max across the two. This will make the distributions
+  # be more visually comparable. This trick came from
+  # https://stackoverflow.com/questions/14584093/ggplot2-find-number-of-counts-in-histogram-maximum
+  y_max_blocked <- ggplot() + 
+    geom_histogram(data = sim_df_blocked, mapping = aes(obs_effect), bins = num_bins) +
+    scale_x_continuous(limits = c(x_min, x_max))
+  y_max_blocked <- ggplot_build(y_max_blocked)$data[[1]] %>% pull(count) %>% max()
+  
+  y_max_not_blocked <- ggplot() + 
+    geom_histogram(data = sim_df_not_blocked, mapping = aes(obs_effect), bins = num_bins) +
+    scale_x_continuous(limits = c(x_min, x_max))
+  y_max_not_blocked <- ggplot_build(y_max_not_blocked)$data[[1]] %>% pull(count) %>% max()
+  
+  y_max <- max(y_max_blocked, y_max_not_blocked) * 1.1
+  
+  # Function to build a plot. We're going to build two, but will use the same
+  # function to get both.
   get_sim_plot <- function(simulation_df, title_label = "Blocked"){
     
     mean_obs <- mean(simulation_df$obs_effect)
     sd_obs <- sd(simulation_df$obs_effect)
     
     gg <- ggplot() + 
-      geom_histogram(data = simulation_df, mapping = aes(obs_effect), fill = "#009CAB", alpha = 0.5, bins = 10) +
+      geom_histogram(data = simulation_df, mapping = aes(obs_effect), 
+                     fill = "#009CAB", alpha = 0.5, bins = num_bins) +
       # Plot the Mean
       geom_vline(aes(xintercept = mean_obs)) +
-      geom_text(data = tibble(x = mean_obs, y = 80, label = paste("Mean:", percent(mean_obs, accuracy = 0.1))),
+      geom_text(data = tibble(x = mean_obs, y = y_max * 0.8, 
+                              label = paste("Mean:", percent(mean_obs, accuracy = 0.1))),
                 mapping = aes(x = x, y = y, label = label),
-                hjust = 0, nudge_x = 0.0015) +
+                hjust = 0, nudge_x = x_nudge, family = "Lato") +
       # Plot + 2SD
       geom_vline(aes(xintercept = mean_obs + 2 * sd_obs), linetype = "dashed") +
-      geom_text(data = tibble(x = mean_obs + 2 * sd_obs, y = 80, label = paste("+2 SD:", percent(mean_obs + 2 * sd_obs, accuracy = 0.1))),
+      geom_text(data = tibble(x = mean_obs + 2 * sd_obs, y = y_max * 0.7, 
+                              label = paste("+2 SD:", percent(mean_obs + 2 * sd_obs, accuracy = 0.1))),
                 mapping = aes(x = x, y = y, label = label),
-                hjust = 0, nudge_x = 0.0015) +
+                hjust = 0, nudge_x = x_nudge, family = "Lato") +
       # Plot - 2SD
       geom_vline(aes(xintercept = mean_obs - 2 * sd_obs), linetype = "dashed") +
-      geom_text(data = tibble(x = mean_obs - 2 * sd_obs, y = 80, label = paste("-2 SD:", percent(mean_obs - 2 * sd_obs, accuracy = 0.1))),
+      geom_text(data = tibble(x = mean_obs - 2 * sd_obs, y = y_max * 0.7, 
+                              label = paste("-2 SD:", percent(mean_obs - 2 * sd_obs, accuracy = 0.1))),
                 mapping = aes(x = x, y = y, label = label),
-                hjust = 1, nudge_x = -0.0015) +
-      labs(title = paste("Sampling Distribution of the Observed Effect", title_label),
-           subtitle = "1,000 Simulations of the Experiment",
-           x = "Observed Effect") +
-      scale_y_continuous(expand = c(0,0)) +
-      scale_x_continuous(labels = percent) +
+                hjust = 1, nudge_x = -1 * x_nudge, family = "Lato") +
+      labs(title = paste("Sampling Distribution of the Observed Effect:", title_label),
+           subtitle = paste(format(input$num_sims, big.mark = ","), "Simulations"),
+           x = "Observed Effect",
+           y = "# of Simulations") +
+      scale_y_continuous(expand = c(0,0), limits = c(0, y_max)) +
+      scale_x_continuous(limits = c(x_min, x_max), labels = label_percent(accuracy = 0.1)) +
       theme_void() +
-      theme(plot.title.position = "plot",
-            plot.title = element_text(face = "bold"),
-            axis.text.x = element_text(margin = margin(8, 0, 8, 0, "pt")),
-            axis.title.x = element_text(face = "bold"),
-            axis.line.x = element_line(color = "#3F433D"))
+      theme(text = element_text(family = "Lato"),
+            plot.title.position = "plot",
+            plot.title = element_text(face = "bold", color = "#221F20", margin = margin(16, 0, 0, 0, "pt")),
+            plot.subtitle = element_text(face = "italic", color = "#7A7574", margin = margin(6, 0, 16, 0, "pt")),
+            panel.background = element_rect(fill = "#F2F2F2", color = NA),
+            plot.background = element_rect(fill = "#F2F2F2", color = NA),
+            axis.text.y = element_text(color = "#7A7574", margin = margin(0, 6, 0, 0, "pt")),
+            axis.text.x = element_text(color = "#7A7574", margin = margin(8, 0, 8, 0, "pt")),
+            axis.title.x = element_text(color = "#3F433D", face = "bold"),
+            axis.title.y = element_text(color = "#3F433D", face = "bold", angle = 90,
+                                        margin = margin(0, 8, 0, 0, "pt")),
+            axis.line.x = element_line(color = "#3F433D"),
+            panel.grid.major.y = element_line(color = "gray80"))
     
     gg
   }
@@ -642,9 +704,9 @@ output$sampling_dist <- renderPlot({
   gg_blocked <- get_sim_plot(sim_df_blocked, "Results with Blocking")
   gg_not_blocked <- get_sim_plot(sim_df_not_blocked, "Results without Blocking")
   
-  gg_blocked / gg_not_blocked
-
-  
+  gg_blocked / gg_not_blocked +
+    plot_annotation(theme = theme(panel.background = element_rect(fill = "#F2F2F2", color = NA),
+                                  plot.background = element_rect(fill = "#F2F2F2", color = NA)))
 },
 height = 600, width = 800)
 
