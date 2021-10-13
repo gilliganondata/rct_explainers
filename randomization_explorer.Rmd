@@ -51,7 +51,7 @@ Inputs {.sidebar}
 # Basically, set a value that will be the number of rows and 1/2 of the # of columns
 sliderTextInput("data_size", label = "Size of the Data Set:", 
                 grid = FALSE, force_edges = TRUE,
-                choices = c("Small", seq(6:39) %>% as.character, "Large"),
+                choices = c("Small", seq(6,39) %>% as.character, "Large"),
                 selected = "20"
 )
 
@@ -125,7 +125,7 @@ get_data <- eventReactive(input$build_data, {
   total_obs <- get_total_obs()
   
   # Build the main data frame
-  df <- tibble(idx = seq(1:total_obs),
+  df <- tibble(idx = seq(1,total_obs),
                color_row = sample(1:nrow(colors_exp_df), 
                                   total_obs, replace = TRUE)) %>% 
     # Set a color
@@ -178,12 +178,52 @@ get_data <- eventReactive(input$build_data, {
     mutate(Y0 = Y0 * color_multiplier,
            Y1 = Y1 * color_multiplier)
 })
+
+get_assignments <- eventReactive(input$run_simulation, {
+  # Get the master data set
+  df <- get_data()
+  total_obs <- nrow(df)
+  
+  # Assign treatment (1) and control (0)
+  if(input$blocking == TRUE){
+    df$assignment <- block_ra(df$color, prob = 0.5)
+  } else {
+    df$assignment <- complete_ra(total_obs, prob = 0.5)
+  }
+  
+  # Populate the colors for the treatment and control groups
+  df <- df %>% 
+    mutate(color_control = if_else(assignment == 0, color, "gray90"),
+           color_treatment = if_else(assignment == 1, color, "gray90"))
+  
+  df
+})
+
+# Get a data frame for just the treatment observations
+get_treatment <- reactive({
+  df <- get_assignments() %>% filter(assignment == 1) 
+  # Set x and y values
+  df$x_pos <- rep(1:(get_num_cols()/2), length.out = nrow(df))
+  # Might not be a perfect split, so go a little long and then clip it
+  df$y_pos <- rep(1:(get_num_rows()+2), each=get_num_cols()/2)[1:nrow(df)]
+  df
+})
+
+# Get a data frame for just the control observations
+get_control <- reactive({
+  df <- get_assignments() %>% filter(assignment == 0) 
+  # Set x and y values
+  df$x_pos <- rep(1:(get_num_cols()/2), length.out = nrow(df))
+  # Might not be a perfect split, so go a little long and then clip it
+  df$y_pos <- rep(1:(get_num_rows()+2), each=get_num_cols()/2)[1:nrow(df)]
+  df
+})
 ```
 
 Row
 -----------------------------------------------------------
 
-**The colors represent a heterogeneous aspect of our sample.** That's just a fancy way of saying, "It varies." Think of this as being something like household income or race or age group. In an RCT, there is all sorts of "unobserved heterogeneity": underlying aspects of the experimental groups that we may not be measurable. This data set will be used in the subsequent simulations.
+**The colors represent a heterogeneous aspect of our sample.** That's just a fancy way of saying, "It varies." Think of this as being something like household income or race or age group. In an RCT, there is all sorts of "unobserved heterogeneity": underlying aspects of the experimental groups that may not be measurable. This data set will be used in the subsequent simulations.
 
 <div style = "text-align: center;">
 ```{r overall_dataset}
@@ -208,7 +248,7 @@ plotOutput("plot_all")
 ```
 </div>
 
-The table below reflects the first few observations from the underlying data set (starting from the bottom left). The Y<sub>0</sub> and Y<sub>1</sub> are potential outcomes: we're operating in a world where we know exactly what outcome we would see whether each observation received or did not receive treatment. These are affected by the Treatment Effect and the Outcome Predictiveness of Color selected at left.
+The table below reflects the first few observations from the underlying data set (starting from the bottom left). Y<sub>0</sub> and Y<sub>1</sub> are potential outcomes: we're operating in a world where we know exactly what outcome we would see whether each observation received or did not receive treatment. These are affected by the Treatment Effect and the Outcome Predictiveness of Color selected at left.
 
 ```{r data-table}
 # Show the underlying data table
@@ -322,10 +362,37 @@ textOutput("true_effect")
 ```{r get_observed}
 
 output$observed_effect <- renderText({
-  df_control <- get_control()
-  df_treatment <- get_treatment()
-  effect <- (sum(df_treatment$Y1) - sum(df_control$Y0)) / sum(df_control$Y0) 
-  msg <- paste("The observed effect is", effect %>% percent(accuracy = 0.1))
+  df <- get_assignments()
+  total_obs <- nrow(df)
+  
+  if(input$blocking == TRUE){
+    obs_effect <- df %>%
+      # Zero out the "unobserved"
+      mutate(Y0 = ifelse(assignment == 0, Y0, NA),
+             Y1 = ifelse(assignment == 1, Y1, NA)) %>%
+      group_by(color) %>%
+      # Observed control and treatment effects, as well as the total observations
+      # for each color, which we'll use for weighting
+      summarize(Y0 = mean(Y0, na.rm = TRUE), Y1 = mean(Y1, na.rm = TRUE),
+                num_obs = n()) %>%
+      ungroup() %>%
+      # Calculate the ATE for each color and then weight it
+      mutate(ate = (Y1 - Y0) / Y0 * num_obs/total_obs) %>%
+      pull(ate) %>% sum()
+  } else {
+    # Summarize: the % change between the mean for Y0 and the mean for Y1
+    obs_effect <- df %>% 
+      # NA out the "unobserved"
+      mutate(Y0 = ifelse(assignment == 0, Y0, NA),
+             Y1 = ifelse(assignment == 1, Y1, NA)) %>% 
+      # Observed control and treatment effects
+      summarize(Y0 = mean(Y0, na.rm = TRUE), Y1 = mean(Y1, na.rm = TRUE)) %>% 
+      # Calculate the ATE
+      mutate(ate = (Y1 - Y0) / Y0) %>% 
+      pull(ate)
+  }
+  
+  msg <- paste("The observed effect is", obs_effect %>% percent(accuracy = 0.1))
 })
 
 textOutput("observed_effect")
@@ -333,49 +400,6 @@ textOutput("observed_effect")
 
 Column
 -----------------------------------------------------------------------
-
-```{r simulation}
-get_assignments <- eventReactive(input$run_simulation, {
-  
-  # Get the master data set
-  df <- get_data()
-  total_obs <- nrow(df)
-  
-  # Assign treatment (1) and control (0)
-  if(input$blocking == TRUE){
-    df$assignment <- block_ra(df$color, prob = 0.5)
-  } else {
-    df$assignment <- complete_ra(total_obs, prob = 0.5)
-  }
-  
-  # Populate the colors for the treatment and control groups
-  df <- df %>% 
-    mutate(color_control = if_else(assignment == 0, color, "gray90"),
-           color_treatment = if_else(assignment == 1, color, "gray90"))
-  
-  df
-})
-
-# Get a data frame for just the treatment observations
-get_treatment <- reactive({
-  df <- get_assignments() %>% filter(assignment == 1) 
-  # Set x and y values
-  df$x_pos <- rep(1:(get_num_cols()/2), length.out = nrow(df))
-  # Might not be a perfect split, so go a little long and then clip it
-  df$y_pos <- rep(1:(get_num_rows()+2), each=get_num_cols()/2)[1:nrow(df)]
-  df
-})
-
-# Get a data frame for just the control observations
-get_control <- reactive({
-  df <- get_assignments() %>% filter(assignment == 0) 
-  # Set x and y values
-  df$x_pos <- rep(1:(get_num_cols()/2), length.out = nrow(df))
-  # Might not be a perfect split, so go a little long and then clip it
-  df$y_pos <- rep(1:(get_num_rows()+2), each=get_num_cols()/2)[1:nrow(df)]
-  df
-})
-```
 
 ```{r}
 # Plot the control and treatment in the same grid maintaining the same layout as the
@@ -400,8 +424,6 @@ get_control <- reactive({
 # 
 # plotOutput("plot_split")
 ```
-
-**Color Comparison**
 
 We've performed _random assignment_ to split the data into two groups: a **control group** and a **treatment group**. We can take our two groups and calculate the "average" color for each group. Pretty close, right?! Is the distribution of the colors across these two groups _identical_? No! But, are they _similar_? Yes! Randomization!!! There are countless characteristics in an RCT that differ across subjects that may or may not be observable. Randomization helps ensure that these differences "come out in the wash." 
 
@@ -564,7 +586,7 @@ get_simulation <- eventReactive(input$run_many_sims, {
   total_obs <- nrow(df)
   
   # Create data frames with rows for the simulations
-  sim_df_blocked <- tibble(index = seq(1:input$num_sims))
+  sim_df_blocked <- tibble(index = seq(1,input$num_sims))
   sim_df_not_blocked <- sim_df_blocked
   
   # Function to split into treatment and control and then get an observed effect.
@@ -576,23 +598,39 @@ get_simulation <- eventReactive(input$run_many_sims, {
     # randomization; otherwise, do complete randomization.
     if(blocked == TRUE){
       df$assignment <- block_ra(df$color, prob = 0.5)
+      
+      # Summarize
+      obs_effect <- df %>% 
+        # Zero out the "unobserved"
+        mutate(Y0 = ifelse(assignment == 0, Y0, NA),
+               Y1 = ifelse(assignment == 1, Y1, NA)) %>% 
+        group_by(color) %>% 
+        # Observed control and treatment effects, as well as the total observations
+        # for each color, which we'll use for weighting
+        summarize(Y0 = mean(Y0, na.rm = TRUE), Y1 = mean(Y1, na.rm = TRUE),
+                  num_obs = n()) %>% 
+        ungroup() %>% 
+        # Calculate the ATE for each color and then weight it
+        mutate(ate = (Y1 - Y0) / Y0 * num_obs/total_obs) %>% 
+        pull(ate) %>% sum()
+      
     } else {
+      
+      # The "not blocked" approach...complete random assignment without accounting
+      # for color
       df$assignment <- complete_ra(total_obs, prob = 0.5)
+      
+      # Summarize: the % change between the mean for Y0 and the mean for Y1
+      obs_effect <- df %>% 
+        # NA out the "unobserved"
+        mutate(Y0 = ifelse(assignment == 0, Y0, NA),
+               Y1 = ifelse(assignment == 1, Y1, NA)) %>% 
+        # Observed control and treatment effects
+        summarize(Y0 = mean(Y0, na.rm = TRUE), Y1 = mean(Y1, na.rm = TRUE)) %>% 
+        # Calculate the ATE
+        mutate(ate = (Y1 - Y0) / Y0) %>% 
+        pull(ate)
     }
-    
-    # Summarize
-    df <- df %>% 
-      group_by(assignment) %>% 
-      summarize(Y0 = sum(Y0),
-                Y1 = sum(Y1))
-    
-    # The observed values for the control (assignment == 0) are the sum of the
-    # Y0 potential outcomes and vice versa for the treated.
-    obs_Y0 <- df %>% filter(assignment == 0) %>% pull(Y0)
-    obs_Y1 <- df %>% filter(assignment == 1) %>% pull(Y1)
-    
-    # Calculate the observed effect as a %
-    obs_effect <- (obs_Y1 - obs_Y0) / obs_Y0
     
     # Return as a data frame row, including TRUE or FALSE for whether blocking
     # was employed.
