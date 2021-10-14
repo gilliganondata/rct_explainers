@@ -1,5 +1,5 @@
 ---
-title: "Exploring the Magic of Randomization"
+title: "The Magic of Randomization"
 output: 
   flexdashboard::flex_dashboard:
     vertical_layout: scroll
@@ -29,44 +29,74 @@ library(patchwork)     # Arrange some plots side by side
 
 set.seed(61705)
 
+# Set the light gray color that matches the theme. It's set as a background in lots
+# of places to make the layout blend with the background
+bg_color <- "#F2F2F2"
+
+# Define the main theme used in plots.
 theme_main <- theme_void() +
   theme(plot.title.position = "plot",
-        plot.title = element_text(hjust = 0.5, size = 16, family = "Lato", color = "#7A7574", face = "bold"),
-        panel.background = element_rect(fill = "#F2F2F2", color = NA),
-        plot.background = element_rect(fill = "#F2F2F2", color = NA))
+        plot.title = element_text(hjust = 0.5, size = 18, family = "Lato", color = "#7A7574", face = "bold"),
+        panel.background = element_rect(fill = bg_color, color = NA),
+        plot.background = element_rect(fill = bg_color, color = NA))
 
 ```
 
-1. Create Data Set
+Overview
+======================================================================
+
+This simulator is intended to be a tool to help students (within academia or not; we're all students of life and seeking knowledge, right?) strengthen their intuition with regards to randomization in the context of randomized controlled trials (aka, field experiments).
+
+#### The Basic World of this Simulator
+
+This simulator constructs a simplified world with the following characteristics:
+
+* A finite set of experimental subjects (you control how many)
+* A "treatment" for which we want to detect the impact (you get to be omnipotent and specify the effect of the treatment as a percentage)
+* A single covariate--represented by "color" (you control the number of levels)
+
+#### Using the Simulator
+
+The simulator is intended to simply follow the three steps at the top of this page:
+
+1. **Create the Data Set**--this is your opportunity to be omnipotent. You get to choose the data set size, the underlying treatment effect (pretend the actual treatment is whatever strikes your fancy!), the number of colors (the number of levels of the "heterogenius covariate"), and the extent to which color (as a covariate) is actually a predictor of the outcome that the treatment is looking to impact.
+
+2. **Run a Single Simulation**--run a single simulation that splits the population (randomly!) into treatment and control groups. You can then actually _see_ what each group looks like, as well as "blend" the covariate (the colors) to see how they actually pretty much even out. But, also, you can start to explore block randomization: the smaller the data set you created, the more you will see differences in the averaged color... _unless_ you randomize _within each color_. This is still randomizing, but it's a simplified example of _block_ randomization. This view also shows the observed effect for the simulation, so, if you run it multiple times, you can start to see how close the "experiment" approximates the true effect.
+
+3. **Simulate Multiple Experiments**--this is an extension of the previous step and focuses on the observed effects by simulating the experiment multiple times and showing how those results are distributed (the "sampling distribution"). This runs the simulations both _with_ block randomization and _without_ block randomization. The beauty of blocking: it will never _increase_ the sampling variability, but, if the covariate(s) being used for blocking are at all predictive of the outcome, it can _decrease_ the sampling variability, which means, in a _single_ experiment, blocking can tighten the range of your estimation of the effect of the treatment.
+
+#### Accessing the Code / Providing Feedback
+
+This simulator was developing using the R programming language (specifically, flexdashboards using Shiny). The code is available under an MIT License at https://github.com/gilliganondata/rct_explainers. Feedback, bugs, and enhancement requests can be logged there as issues.
+
+1. Create the Data Set
 ======================================================================
 
 Inputs {.sidebar}
 -----------------------------------------------------------------------
 
 ###
-<div style="font-size: 0.9em; font-style: italic;">Configure the data set parameters and then click the button to build it.</div>
+<div style="font-size: 0.9em; font-style: italic;">Configure the parameters for the date set that will be used for the simulations.</div>
 <hr>
 
 ```{r data-size}
 # Basically, set a value that will be the number of rows and 1/2 of the # of columns
 sliderTextInput("data_size", label = "Size of the Data Set:", 
                 grid = FALSE, force_edges = TRUE,
-                choices = c("Small", seq(6,39) %>% as.character, "Large"),
-                selected = "20"
-)
+                choices = c("Small", seq(5,39) %>% as.character, "Large"),
+                selected = "20")
 
 sliderInput("num_colors", label = "Number of Unique Colors:",
-            min = 3, max = 8, value = 6, step = 1)
+            ticks = FALSE, min = 3, max = 8, value = 6, step = 1)
 
 # Set the effect size. Be omnipotent!
 sliderTextInput("effect_size", label = "Treatment Effect*:", 
                 grid = FALSE, force_edges = TRUE,
                 choices = c("0%", "1%", "5%", "10%", "15%", "20%", "25%", "30%"),
-                selected = "15%"
-)
+                selected = "15%")
 ```
 
-<div style="font-size: 0.7em; font-style: italic;">\* You're omnipotent! (You wouldn't know this in reality.)</div>
+<div style="font-size: 0.7em; font-style: italic; padding-bottom: 10px; padding-left: 10px; text-indent: -10px;">\* You're omnipotent! (You wouldn't know this in reality.)</div>
 
 ```{r color-predictiveness}
 
@@ -82,7 +112,7 @@ sliderTextInput("color_predictiveness", label = "Outcome Predictiveness of Color
 ```{r build_data_button}
 # This is to build the base, all-knowing data frame. Simulations will then
 # split this data set into treatment and control and try it out.
-actionButton("build_data", "Build Data Set")
+actionButton("build_data", "Create the Data Set")
 ```
 </div>
 
@@ -90,7 +120,7 @@ actionButton("build_data", "Build Data Set")
 # Get the data size. This translates what is a text input into a numeric
 get_data_size <- eventReactive(input$build_data, {
   data_size <- case_when(
-    input$data_size == "Small" ~ 5,
+    input$data_size == "Small" ~ 4,
     input$data_size == "Large" ~ 40,
     TRUE ~ as.numeric(input$data_size)
   )
@@ -223,7 +253,7 @@ get_control <- reactive({
 Row
 -----------------------------------------------------------
 
-**The colors represent a heterogeneous aspect of our sample.** That's just a fancy way of saying, "It varies." Think of this as being something like household income or race or age group. In an RCT, there is all sorts of "unobserved heterogeneity": underlying aspects of the experimental groups that may not be measurable. This data set will be used in the subsequent simulations.
+**The data set you generated.** The treatment effect isn't _exactly_ what you specified, but that's random data generation for ya`.
 
 <div style = "text-align: center;">
 ```{r overall_dataset}
@@ -248,7 +278,7 @@ plotOutput("plot_all")
 ```
 </div>
 
-The table below reflects the first few observations from the underlying data set (starting from the bottom left). Y<sub>0</sub> and Y<sub>1</sub> are potential outcomes: we're operating in a world where we know exactly what outcome we would see whether each observation received or did not receive treatment. These are affected by the Treatment Effect and the Outcome Predictiveness of Color selected at left.
+Below are the first few subjects from the data set (starting from the bottom left above). Y<sub>0</sub> and Y<sub>1</sub> are the _potential outcomes_ (we're in a world where we know exactly what outcome we would see whether each subject received or did not receive treatment).
 
 ```{r data-table}
 # Show the underlying data table
@@ -282,7 +312,7 @@ output$data_master <- render_gt({
       label = "Potential Outcomes",
       columns = c(Y0, Y1)
     ) %>% 
-    tab_style(style = list(cell_fill(color = "#F2F2F2")),
+    tab_style(style = list(cell_fill(color = bg_color)),
               locations = list(cells_body(), cells_column_spanners(),
                                cells_column_labels())) %>% 
     cols_label(Y0 = gt::html("Y<sub>0</sub> (Not Treated)"), 
@@ -347,12 +377,13 @@ textOutput("unique_colors")
 
 Observed vs. True Effect:
 
-```{r get_true}
+```{r get_true, results = 'as.is'}
 
+# Output the true effect
 output$true_effect <- renderText({
   df <- get_data()
   effect <- (sum(df$Y1) - sum(df$Y0)) / sum(df$Y0) 
-  msg <- paste("The (unknowable) true effect is", effect %>% percent(accuracy = 0.1))
+  msg <- paste("The true effect:", effect %>% percent(accuracy = 0.1))
 })
 
 textOutput("true_effect")
@@ -392,7 +423,7 @@ output$observed_effect <- renderText({
       pull(ate)
   }
   
-  msg <- paste("The observed effect is", obs_effect %>% percent(accuracy = 0.1))
+  msg <- paste("The observed effect:", obs_effect %>% percent(accuracy = 0.1))
 })
 
 textOutput("observed_effect")
@@ -425,7 +456,7 @@ Column
 # plotOutput("plot_split")
 ```
 
-We've performed _random assignment_ to split the data into two groups: a **control group** and a **treatment group**. We can take our two groups and calculate the "average" color for each group. Pretty close, right?! Is the distribution of the colors across these two groups _identical_? No! But, are they _similar_? Yes! Randomization!!! There are countless characteristics in an RCT that differ across subjects that may or may not be observable. Randomization helps ensure that these differences "come out in the wash." 
+We've performed _random assignment_ to split the data into the two groups below. There are countless characteristics in an RCT that differ across subjects that may or may not be observable. Randomization helps ensure that these differences "come out in the wash." 
 
 ```{r}
 
@@ -466,7 +497,7 @@ output$plot_comparison <- renderPlot({
     labs(title = paste("Mean Control Color:", mean_control)) +
     theme_main +
     theme(plot.title = element_text(margin = margin(0.25,0,0.25,0, "cm")),
-          plot.background = element_rect(fill = "#F2F2F2", color = NA),
+          plot.background = element_rect(fill = bg_color, color = NA),
           panel.background = element_rect(fill = mean_control, color = NA),
           panel.border = element_rect(fill = NA, colour = "white", size = 10))
   
@@ -479,7 +510,7 @@ output$plot_comparison <- renderPlot({
     labs(title = paste("Mean Treatment Color:", mean_treatment)) +
     theme_main +
     theme(plot.title = element_text(margin = margin(0.25,0,0.25,0, "cm")),
-          plot.background = element_rect(fill = "#F2F2F2", color = NA),
+          plot.background = element_rect(fill = bg_color, color = NA),
           panel.background = element_rect(fill = mean_treatment, color = NA),
           panel.border = element_rect(fill = NA, colour = "white", size = 10))
   
@@ -540,8 +571,8 @@ output$plot_comparison <- renderPlot({
     (gg_control_mean | gg_treatment_mean) / 
     (gg_control_bar | gg_treatment_bar) +
     plot_layout(heights = c(3, 1, 2)) +
-    plot_annotation(theme = theme(panel.background = element_rect(fill = "#F2F2F2", color = NA),
-                                  plot.background = element_rect(fill = "#F2F2F2", color = NA)))
+    plot_annotation(theme = theme(panel.background = element_rect(fill = bg_color, color = NA),
+                                  plot.background = element_rect(fill = bg_color, color = NA)))
   
   
 }, height = 800, width = 800)
@@ -557,15 +588,15 @@ Inputs {.sidebar}
 -----------------------------------------------------------------------
 
 ###
-<div style="font-size: 0.9em; font-style: italic;">In reality, we only run one experiment. But, with simulation, we can run the same experiment (re-doing the random assignment of treatment and control each time) multiple times.</div>
+<div style="font-size: 0.9em; font-style: italic;">Randomly assign treatment and control multiple times.</div>
 <hr>
 
 ```{r sim_num}
 sliderInput("num_sims", label = "Number of Simulations:",
-            min = 100, max = 1000, value = 500, step = 100)
+            ticks = FALSE, min = 100, max = 1000, value = 500, step = 100)
 ```
 
-<div style="font-size: 0.9em; font-style: italic;">This many simulations will be run both with and then without blocking.</div>
+<div style="font-size: 0.9em; font-style: italic;">Run simulations with and then without blocking.</div>
 
 ###
 <div style = "text-align: center;">
@@ -573,6 +604,43 @@ sliderInput("num_sims", label = "Number of Simulations:",
 actionButton("run_many_sims", "Run Simulations")
 ```
 </div>
+<hr>
+
+```{r multi_sim_settings}
+
+# Output the true effect
+output$true_effect_2 <- renderText({
+  df <- get_data()
+  effect <- (sum(df$Y1) - sum(df$Y0)) / sum(df$Y0) 
+  msg <- paste("The true effect:", effect %>% percent(accuracy = 0.1))
+})
+
+textOutput("true_effect_2")
+
+# Show Data Set Size
+output$data_size_2 <- renderText({
+  ttl_obs <- get_total_obs()
+  msg <- paste("Total Observations:", format(ttl_obs, big.mark = ","))
+})
+
+textOutput("data_size_2")
+
+# Show # of colors
+output$unique_colors_2 <- renderText({
+  msg <- paste("Unique Colors:", input$num_colors)
+})
+
+textOutput("unique_colors_2")
+
+# Predictiveness of Color
+# Show # of colors
+output$predictiveness <- renderText({
+  msg <- paste("Predictiveness of Color:", input$color_predictiveness)
+})
+
+textOutput("predictiveness")
+
+```
 
 Column
 -------------------------------------------------
@@ -715,8 +783,9 @@ output$sampling_dist <- renderPlot({
                               label = paste("-2 SD:", percent(mean_obs - 2 * sd_obs, accuracy = 0.1))),
                 mapping = aes(x = x, y = y, label = label),
                 hjust = 1, nudge_x = -1 * x_nudge, family = "Lato") +
-      labs(title = paste("Sampling Distribution of the Observed Effect:", title_label),
-           subtitle = paste(format(input$num_sims, big.mark = ","), "Simulations"),
+      labs(title = title_label,
+           subtitle = paste("Sampling Distribution of the Observed Effect:",
+                            format(input$num_sims, big.mark = ","), "Simulations"),
            x = "Observed Effect",
            y = "# of Simulations") +
       scale_y_continuous(expand = c(0,0), limits = c(0, y_max)) +
@@ -724,10 +793,12 @@ output$sampling_dist <- renderPlot({
       theme_void() +
       theme(text = element_text(family = "Lato"),
             plot.title.position = "plot",
-            plot.title = element_text(face = "bold", color = "#221F20", margin = margin(16, 0, 0, 0, "pt")),
-            plot.subtitle = element_text(face = "italic", color = "#7A7574", margin = margin(6, 0, 16, 0, "pt")),
-            panel.background = element_rect(fill = "#F2F2F2", color = NA),
-            plot.background = element_rect(fill = "#F2F2F2", color = NA),
+            plot.title = element_text(size = 16, face = "bold", 
+                                      color = "#221F20", margin = margin(18, 0, 0, 0, "pt")),
+            plot.subtitle = element_text(size = 12, face = "italic", color = "#7A7574", 
+                                         margin = margin(6, 0, 16, 0, "pt")),
+            panel.background = element_rect(fill = bg_color, color = NA),
+            plot.background = element_rect(fill = bg_color, color = NA),
             axis.text.y = element_text(color = "#7A7574", margin = margin(0, 6, 0, 0, "pt")),
             axis.text.x = element_text(color = "#7A7574", margin = margin(8, 0, 8, 0, "pt")),
             axis.title.x = element_text(color = "#3F433D", face = "bold"),
@@ -743,8 +814,8 @@ output$sampling_dist <- renderPlot({
   gg_not_blocked <- get_sim_plot(sim_df_not_blocked, "Results without Blocking")
   
   gg_blocked / gg_not_blocked +
-    plot_annotation(theme = theme(panel.background = element_rect(fill = "#F2F2F2", color = NA),
-                                  plot.background = element_rect(fill = "#F2F2F2", color = NA)))
+    plot_annotation(theme = theme(panel.background = element_rect(fill = bg_color, color = NA),
+                                  plot.background = element_rect(fill = bg_color, color = NA)))
 },
 height = 600, width = 800)
 
